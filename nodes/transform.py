@@ -114,7 +114,9 @@ class ComputeRetargetTransform:
             "driving_anchor": driving_anchor.tolist(),
             "reference_anchor": reference_anchor.tolist(),
             "anchor_mode": selected_mode,
-            "format": format
+            "format": format,
+            "driving_scale_metric": d_scale_ref,
+            "reference_scale_metric": r_scale_ref
         }
         
         debug_info = json.dumps(transform, indent=2)
