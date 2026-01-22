@@ -53,10 +53,10 @@ class SkeletonToOpenPoseImage:
             # Fallback
             connections_to_draw = []
         elif isinstance(format_connections, list):
-             connections_to_draw = format_connections # COCO-18, BODY-25
+             connections_to_draw = list(format_connections) # Copy to avoid mutation
         elif isinstance(format_connections, dict):
-             # COCO-133
-             connections_to_draw = format_connections["body"]
+             # COCO-133 - MUST copy to avoid mutating the original
+             connections_to_draw = list(format_connections["body"])
              if render_hands:
                  connections_to_draw.extend(format_connections["left_hand"])
                  connections_to_draw.extend(format_connections["right_hand"])

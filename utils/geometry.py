@@ -6,7 +6,7 @@ from .definitions import KEYPOINT_MAPPING, get_anchor_indices
 def euclidean_distance(p1: Tuple[float, float], p2: Tuple[float, float]) -> float:
     return math.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
 
-def compute_torso_anchor(skeleton: torch.Tensor, format: str = "COCO-18") -> Tuple[float, float]:
+def compute_torso_anchor(skeleton: torch.Tensor, format: str = "COCO-18", min_confidence: float = 0.1) -> Tuple[float, float]:
     """
     Compute default anchor (approx center of torso) for a single skeleton.
     Useful for tracking.
@@ -16,9 +16,9 @@ def compute_torso_anchor(skeleton: torch.Tensor, format: str = "COCO-18") -> Tup
     
     sum_x, sum_y, count = 0.0, 0.0, 0
     for idx in indices:
-        if idx is not None and skeleton[idx, 2] > 0.05: # Minimal confidence
-            sum_x += skeleton[idx, 0]
-            sum_y += skeleton[idx, 1]
+        if idx is not None and skeleton[idx, 2] > min_confidence:
+            sum_x += skeleton[idx, 0].item()
+            sum_y += skeleton[idx, 1].item()
             count += 1
             
     if count == 0:
@@ -26,7 +26,7 @@ def compute_torso_anchor(skeleton: torch.Tensor, format: str = "COCO-18") -> Tup
         
     return (sum_x / count, sum_y / count)
 
-def select_largest_person(pose_list: List[torch.Tensor], format: str) -> int:
+def select_largest_person(pose_list: List[torch.Tensor], format: str, min_confidence: float = 0.1) -> int:
     """
     Select index of person with largest bounding box area.
     pose_list: List of [K, 3] tensors
@@ -36,7 +36,7 @@ def select_largest_person(pose_list: List[torch.Tensor], format: str) -> int:
     
     for i, pose in enumerate(pose_list):
         # Compute bbox
-        valid = pose[:, 2] > 0.05
+        valid = pose[:, 2] > min_confidence
         if not valid.any():
             continue
             
@@ -56,7 +56,8 @@ def select_largest_person(pose_list: List[torch.Tensor], format: str) -> int:
 def track_person_across_frames(
     pose_sequences: List[List[torch.Tensor]], 
     tracking_threshold: float,
-    format: str = "COCO-18"
+    format: str = "COCO-18",
+    min_confidence: float = 0.1
 ) -> List[int]:
     """
     Track a single person across video frames using anchor-based matching.
@@ -74,9 +75,9 @@ def track_person_across_frames(
             
         if prev_anchor is None:
             # Frame 0: pick largest
-            best_idx = select_largest_person(frame_poses, format)
+            best_idx = select_largest_person(frame_poses, format, min_confidence)
             if best_idx != -1:
-                prev_anchor = compute_torso_anchor(frame_poses[best_idx], format)
+                prev_anchor = compute_torso_anchor(frame_poses[best_idx], format, min_confidence)
                 selected.append(best_idx)
             else:
                 selected.append(-1)
@@ -86,7 +87,7 @@ def track_person_across_frames(
             best_dist = float('inf')
             
             for person_idx, person in enumerate(frame_poses):
-                anchor = compute_torso_anchor(person, format)
+                anchor = compute_torso_anchor(person, format, min_confidence)
                 dist = euclidean_distance(anchor, prev_anchor)
                 if dist < best_dist:
                     best_dist = dist
@@ -95,12 +96,11 @@ def track_person_across_frames(
             if best_dist > tracking_threshold:
                 # Lost tracking
                 selected.append(-1)
-                # Don't update anchor if lost? Or keep searching?
-                # We'll stick to last known good anchor if lost.
+                # Don't update anchor if lost. Stick to last known good anchor.
             else:
                 selected.append(best_idx)
                 # Smooth anchor update (momentum)
-                new_anchor = compute_torso_anchor(frame_poses[best_idx], format)
+                new_anchor = compute_torso_anchor(frame_poses[best_idx], format, min_confidence)
                 prev_anchor = (
                     0.7 * new_anchor[0] + 0.3 * prev_anchor[0],
                     0.7 * new_anchor[1] + 0.3 * prev_anchor[1]

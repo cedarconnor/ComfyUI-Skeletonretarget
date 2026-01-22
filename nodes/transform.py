@@ -85,12 +85,21 @@ class ComputeRetargetTransform:
                              r_scale_ref = r_width.item()
             
             elif selected_mode == "torso" or selected_mode == "neck":
-               # Use shoulder width as proxy if available
+               # Use shoulder width as proxy for scale
                sh_indices = get_anchor_indices(format, "shoulders")
                p1_idx, p2_idx = sh_indices[0], sh_indices[1]
-               # ... similar logic ...
-               # For brevity, implementing simple fallback
-               pass 
+               if p1_idx is not None and p2_idx is not None:
+                   d_valid = driving_skeleton[p1_idx, 2] > min_anchor_confidence and driving_skeleton[p2_idx, 2] > min_anchor_confidence
+                   r_valid = reference_skeleton[p1_idx, 2] > min_anchor_confidence and reference_skeleton[p2_idx, 2] > min_anchor_confidence
+                   
+                   if d_valid and r_valid:
+                       d_width = torch.norm(driving_skeleton[p1_idx, :2] - driving_skeleton[p2_idx, :2])
+                       r_width = torch.norm(reference_skeleton[p1_idx, :2] - reference_skeleton[p2_idx, :2])
+                       
+                       if d_width > 0.01:
+                           scale = (r_width / d_width).item()
+                           d_scale_ref = d_width.item()
+                           r_scale_ref = r_width.item()
 
         # Compute Rotation
         rotation = 0.0
