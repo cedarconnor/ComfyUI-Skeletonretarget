@@ -19,7 +19,7 @@ class SkeletonToOpenPoseImage:
                 "point_radius": ("INT", {"default": 4, "min": 1, "max": 20}),
                 "background": (["black", "white", "transparent"], {"default": "black"}),
                 "render_hands": ("BOOLEAN", {"default": True}),
-                "render_face": ("BOOLEAN", {"default": False}),
+                "render_face": ("BOOLEAN", {"default": True}),
             },
             "optional": {
                 "min_confidence": ("FLOAT", {"default": 0.1, "min": 0.0, "max": 1.0, "step": 0.05}),

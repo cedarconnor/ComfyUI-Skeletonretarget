@@ -116,7 +116,9 @@ class ComputeRetargetTransform:
             "anchor_mode": selected_mode,
             "format": format,
             "driving_scale_metric": d_scale_ref,
-            "reference_scale_metric": r_scale_ref
+            "reference_scale_metric": r_scale_ref,
+            "driving_initial_pose": driving_skeleton.tolist(),
+            "reference_initial_pose": reference_skeleton.tolist()
         }
         
         debug_info = json.dumps(transform, indent=2)
@@ -130,6 +132,7 @@ class ApplyRetargetTransform:
             "required": {
                 "skeleton_sequence": ("SKELETON_SEQ",),
                 "transform": ("SKELETON_TRANSFORM",),
+                "retargeting_mode": (["absolute", "relative"], {"default": "absolute"}),
                 "bounds_mode": (["none", "clamp", "scale_to_fit", "flag_only"], {"default": "none"}),
             },
             "optional": {
@@ -142,7 +145,7 @@ class ApplyRetargetTransform:
     FUNCTION = "apply"
     CATEGORY = "SkeletonRetarget/Transform"
     
-    def apply(self, skeleton_sequence, transform, bounds_mode, min_confidence=0.0):
+    def apply(self, skeleton_sequence, transform, bounds_mode, retargeting_mode="absolute", min_confidence=0.0):
         N, K, _ = skeleton_sequence.shape
         device = skeleton_sequence.device
         result = skeleton_sequence.clone()
@@ -157,29 +160,79 @@ class ApplyRetargetTransform:
         # The design doc says: "Keep original coordinates for low-confidence points"
         conf_mask = conf >= min_confidence  # [N, K]
         
-        # Step 1: Translate to driving anchor origin
-        driving_anchor = torch.tensor(transform["driving_anchor"], dtype=xy.dtype, device=device)
-        xy = xy - driving_anchor  # Broadcasting: [N, K, 2] - [2]
-        
-        # Step 2: Apply scale
-        scale = transform["scale"]
-        if scale != 1.0:
-            xy = xy * scale
-        
-        # Step 3: Apply rotation (if non-zero)
-        rotation = transform["rotation"]
-        if abs(rotation) > 1e-6:
-            cos_r = math.cos(rotation)
-            sin_r = math.sin(rotation)
+        if retargeting_mode == "relative":
+            # Relative Retargeting: Apply motion DELTA from driving initial to driving current
+            # to reference initial.
+            # Delta = Driving_Current - Driving_Initial
+            # Result = Reference_Initial + Delta * Scale
             
-            # Rotation matrix multiplication
-            x_new = xy[:, :, 0] * cos_r - xy[:, :, 1] * sin_r
-            y_new = xy[:, :, 0] * sin_r + xy[:, :, 1] * cos_r
-            xy = torch.stack([x_new, y_new], dim=2)
-        
-        # Step 4: Translate to reference anchor
-        reference_anchor = torch.tensor(transform["reference_anchor"], dtype=xy.dtype, device=device)
-        xy = xy + reference_anchor
+            # Get cached initial poses (ensure they exist in transform)
+            if "driving_initial_pose" not in transform or "reference_initial_pose" not in transform:
+                # Fallback to absolute if missing data (e.g. old workflow)
+                print("Warning: Missing initial pose data for relative retargeting. Falling back to absolute.")
+                return self.apply(skeleton_sequence, transform, bounds_mode, "absolute", min_confidence)
+                
+            driving_initial = torch.tensor(transform["driving_initial_pose"], device=device)[:, :2] # [K, 2]
+            reference_initial = torch.tensor(transform["reference_initial_pose"], device=device)[:, :2] # [K, 2]
+            
+            # Prepare scale
+            scale = transform["scale"]
+            
+            # Current Driving Position (xy) is driving_sequence frame i
+            # Delta calculation
+            # We need to compute delta for EACH frame relative to driving_initial
+            
+            # 1. Translate current sequence by subtracting driving initial? 
+            # OR better: 
+            # Delta = xy - driving_initial (broadcasting [N, K, 2] - [K, 2])
+            
+            delta = xy - driving_initial
+            
+            # 2. Apply Scale to Delta
+            if scale != 1.0:
+                delta = delta * scale
+                
+            # 3. Apply Rotation to Delta
+            rotation = transform["rotation"]
+            if abs(rotation) > 1e-6:
+                cos_r = math.cos(rotation)
+                sin_r = math.sin(rotation)
+                
+                # Rotation matrix multiplication
+                d_x = delta[:, :, 0] * cos_r - delta[:, :, 1] * sin_r
+                d_y = delta[:, :, 0] * sin_r + delta[:, :, 1] * cos_r
+                delta = torch.stack([d_x, d_y], dim=2)
+                
+            # 4. Add to Reference Initial
+            # result = reference_initial + delta
+            xy = reference_initial + delta
+            
+        else:
+            # Absolute Retargeting (Original Logic)
+            
+            # Step 1: Translate to driving anchor origin
+            driving_anchor = torch.tensor(transform["driving_anchor"], dtype=xy.dtype, device=device)
+            xy = xy - driving_anchor  # Broadcasting: [N, K, 2] - [2]
+            
+            # Step 2: Apply scale
+            scale = transform["scale"]
+            if scale != 1.0:
+                xy = xy * scale
+            
+            # Step 3: Apply rotation (if non-zero)
+            rotation = transform["rotation"]
+            if abs(rotation) > 1e-6:
+                cos_r = math.cos(rotation)
+                sin_r = math.sin(rotation)
+                
+                # Rotation matrix multiplication
+                x_new = xy[:, :, 0] * cos_r - xy[:, :, 1] * sin_r
+                y_new = xy[:, :, 0] * sin_r + xy[:, :, 1] * cos_r
+                xy = torch.stack([x_new, y_new], dim=2)
+            
+            # Step 4: Translate to reference anchor
+            reference_anchor = torch.tensor(transform["reference_anchor"], dtype=xy.dtype, device=device)
+            xy = xy + reference_anchor
         
         # Apply confidence mask (revert low-confidence points to original)
         # Using unsqueeze(2) as suggested

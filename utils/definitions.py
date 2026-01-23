@@ -173,8 +173,11 @@ def _generate_face_connections(start_idx):
     # Mouth
     mouth_outer = [(start_idx+48, start_idx+49), (start_idx+49, start_idx+50), (start_idx+50, start_idx+51), (start_idx+51, start_idx+52), (start_idx+52, start_idx+53), (start_idx+53, start_idx+54),
                    (start_idx+54, start_idx+55), (start_idx+55, start_idx+56), (start_idx+56, start_idx+57), (start_idx+57, start_idx+58), (start_idx+58, start_idx+59), (start_idx+59, start_idx+48)]
+    # Inner mouth (60-67)
+    mouth_inner = [(start_idx+60, start_idx+61), (start_idx+61, start_idx+62), (start_idx+62, start_idx+63), (start_idx+63, start_idx+64),
+                   (start_idx+64, start_idx+65), (start_idx+65, start_idx+66), (start_idx+66, start_idx+67), (start_idx+67, start_idx+60)]
     
-    return jaw + l_brow + r_brow + nose_bridge + nose_base + l_eye + r_eye + mouth_outer
+    return jaw + l_brow + r_brow + nose_bridge + nose_base + l_eye + r_eye + mouth_outer + mouth_inner
 
 LIMB_CONNECTIONS = {
     "COCO-18": [
