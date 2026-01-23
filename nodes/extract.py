@@ -65,48 +65,125 @@ class ExtractSkeletonFromPose:
                 people_list = frame_content # Some nodes return list of people directly
             
             for person in people_list:
-                keypoints_list = []
-                if 'pose_keypoints_2d' in person:
-                    keypoints_list = person['pose_keypoints_2d']
-                elif 'keypoints' in person:
-                    keypoints_list = person['keypoints']
+                # Initialize fully zeroed array for this person
+                final_kp_np = np.zeros((k_count, 3))
                 
-                # Reshape to [K, 3]
-                # Flat list: x, y, c, x, y, c...
-                if len(keypoints_list) > 0:
-                    try:
-                        kp_np = np.array(keypoints_list).reshape(-1, 3)
+                # 1. Body / Pose
+                pose_kp = []
+                if 'pose_keypoints_2d' in person:
+                    pose_kp = person['pose_keypoints_2d']
+                elif 'keypoints' in person:
+                    pose_kp = person['keypoints']
+                
+                if len(pose_kp) > 0:
+                    pose_np = np.array(pose_kp).reshape(-1, 3)
+                    num_body = pose_np.shape[0]
+                    
+                    if format == "COCO-133":
+                        # Special handling for COCO-133 construction
+                        if num_body == 18:
+                            # Remap OpenPose-18 to COCO-133 Body slots
+                            # OP18: 0=Nose, 1=Neck, 2=RSho, 3=RElb, 4=RWri, 5=LSho, 6=LElb, 7=LWri, 8=RHip...
+                            # C133: 0=Nose, 1=LEye, 2=REye, 3=LEar, 4=REar, 5=LSho, 6=RSho, 7=LElb, 8=RElb...
+                            
+                            # Map: Source Index -> Target Index
+                            op18_to_c133 = {
+                                0: 0,   # Nose -> Nose
+                                # 1 (Neck) -> Skip
+                                2: 6,   # RSho -> RSho
+                                3: 8,   # RElb -> RElb
+                                4: 10,  # RWri -> RWri
+                                5: 5,   # LSho -> LSho
+                                6: 7,   # LElb -> LElb
+                                7: 9,   # LWri -> LWri
+                                8: 12,  # RHip -> RHip
+                                9: 14,  # RKnee -> RKnee
+                                10: 16, # RAnk -> RAnk
+                                11: 11, # LHip -> LHip
+                                12: 13, # LKnee -> LKnee
+                                13: 15, # LAnk -> LAnk
+                                14: 2,  # REye -> REye
+                                15: 1,  # LEye -> LEye
+                                16: 4,  # REar -> REar
+                                17: 3   # LEar -> LEar
+                            }
+                            
+                            for src_i, tgt_i in op18_to_c133.items():
+                                if src_i < num_body:
+                                    final_kp_np[tgt_i] = pose_np[src_i]
+                                    
+                        elif num_body == 133:
+                            # Already 133, assume correct mapping
+                            final_kp_np = pose_np
+                        else:
+                            # Fallback: exact copy up to length (e.g. COCO-17)
+                            limit = min(num_body, 133)
+                            final_kp_np[:limit] = pose_np[:limit]
+                            
+                        # 2. Face (Only for COCO-133)
+                        # keys: face_keypoints_2d
+                        if 'face_keypoints_2d' in person:
+                            face_kp = person['face_keypoints_2d']
+                            if face_kp is not None and len(face_kp) > 0:
+                                face_np = np.array(face_kp).reshape(-1, 3)
+                                # COCO-133 Face starts at 23, length usually 68 (sometimes 70 in OP)
+                                # DWPose 68 points usually map to 23-90
+                                n_face = face_np.shape[0]
+                                limit_face = min(n_face, 68)
+                                final_kp_np[23:23+limit_face] = face_np[:limit_face]
                         
-                        # Fix Keypoint Count mismatch if needed (common with 18 vs 17 vs 133)
-                        # If we have more keypoints than expected, truncate. If less, pad.
-                        if kp_np.shape[0] != k_count:
-                             logger.warning(f"Expected {k_count} keypoints, got {kp_np.shape[0]}. Adjusting.")
-                             if kp_np.shape[0] > k_count:
-                                 kp_np = kp_np[:k_count, :]
-                             else:
-                                 # Pad with zeros
-                                 padding = np.zeros((k_count - kp_np.shape[0], 3))
-                                 kp_np = np.vstack([kp_np, padding])
-                        
-                        # Normalize coordinates if they are pixel values
-                        # We need image dimensions. If not provided, try to guess or assume normalized?
-                        # OpenPose JSON is typically pixel coordinates.
-                        # Some Comfy nodes return normalized [0,1].
-                        # Inspect first point value.
-                        if kp_np[:, :2].max() > 1.1: # Likely pixel coordinates
-                            # We need image dimensions to normalize.
-                            if image_for_dimensions is not None:
-                                _, H, W, _ = image_for_dimensions.shape
-                                kp_np[:, 0] /= W
-                                kp_np[:, 1] /= H
-                            else:
-                                logger.warning("Detected pixel coordinates but no image_for_dimensions provided. Coordinates may be incorrect.")
-                        
-                        frame_people_tensors.append(torch.from_numpy(kp_np).float())
-                        
-                    except Exception as e:
-                        print(f"Error parsing person in frame {frame_idx}: {e}")
-                        continue
+                        # 3. Hands
+                        # keys: hand_left_keypoints_2d, hand_right_keypoints_2d
+                        # Left Hand starts at 91 (21 points)
+                        if 'hand_left_keypoints_2d' in person:
+                            lhand_kp = person['hand_left_keypoints_2d']
+                            if lhand_kp is not None and len(lhand_kp) > 0:
+                                lh_np = np.array(lhand_kp).reshape(-1, 3)
+                                final_kp_np[91:91+21] = lh_np[:21]
+
+                        # Right Hand starts at 112 (21 points)
+                        if 'hand_right_keypoints_2d' in person:
+                            rhand_kp = person['hand_right_keypoints_2d']
+                            if rhand_kp is not None and len(rhand_kp) > 0:
+                                rh_np = np.array(rhand_kp).reshape(-1, 3)
+                                final_kp_np[112:112+21] = rh_np[:21]
+                                
+                    else:
+                        # Non-133 formats (legacy behavior)
+                        # Fix Keypoint Count mismatch
+                        if pose_np.shape[0] > k_count:
+                             pose_np = pose_np[:k_count, :]
+                        elif pose_np.shape[0] < k_count:
+                             padding = np.zeros((k_count - pose_np.shape[0], 3))
+                             pose_np = np.vstack([pose_np, padding])
+                        final_kp_np = pose_np
+
+                try:
+                    # Normalize coordinates if they are pixel values
+                    # Check first few points for value > 1.0 (assuming normalized is 0-1)
+                    # Use final_kp_np
+                    
+                    # We need to detect if it was pixel coords. 
+                    # If we built it from parts, we need to check the parts?
+                    # final_kp_np might have mix if sources differed? Unlikely.
+                    
+                    # Heuristic: check max value in x,y columns
+                    max_val = final_kp_np[:, :2].max()
+                    
+                    if max_val > 1.1: # Likely pixel coordinates
+                        if image_for_dimensions is not None:
+                            _, H, W, _ = image_for_dimensions.shape
+                            final_kp_np[:, 0] /= W
+                            final_kp_np[:, 1] /= H
+                        else:
+                            # Warn once?
+                            pass
+                    
+                    frame_people_tensors.append(torch.from_numpy(final_kp_np).float())
+                    
+                except Exception as e:
+                    print(f"Error processing person in frame {frame_idx}: {e}")
+                    continue
             
             processed_frames.append(frame_people_tensors)
 

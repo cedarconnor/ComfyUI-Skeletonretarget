@@ -1,5 +1,7 @@
 # ComfyUI-SkeletonRetarget
 
+<video src="Offset.mp4" controls width="100%"></video>
+
 A custom node pack for ComfyUI that aligns and retargets skeletal pose data from a driving video sequence to match the body proportions and position of a reference image. This enables consistent motion transfer for AI video generation (e.g., AnimateDiff, Vid2Vid) by eliminating pose mismatch issues.
 
 ## 🌟 Features
