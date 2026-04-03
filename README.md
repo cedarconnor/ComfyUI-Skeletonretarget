@@ -2,79 +2,98 @@
 
 ![Demo Offset](Offset.gif)
 
-A custom node pack for ComfyUI that aligns and retargets skeletal pose data from a driving video sequence to match the body proportions and position of a reference image. This enables consistent motion transfer for AI video generation (e.g., AnimateDiff, Vid2Vid) by eliminating pose mismatch issues.
+A ComfyUI custom node pack for skeleton retargeting and face mesh manipulation. Align driving video poses to reference images for consistent AI video generation, and reorient captured faces with texture-mapped 3D mesh rendering for video diffusion anchoring.
 
-## 🌟 Features
+## Features
 
--   **Pose Extraction**: Convert standard pose keypoints (from DWPose/OpenPose estimators) into high-precision skeleton tensors.
--   **Intelligent Tracking**: Built-in simple person tracking to follow a specific subject across video frames.
--   **Automatic Retargeting**: Compute scale and rotation transforms to map a driving skeleton to a reference skeleton using configurable anchors (Hips, Shoulders, Torso, etc.).
--   **Vectorized Transformation**: Fast, GPU-accelerated application of transforms to entire pose sequences.
--   **Visualization**: Render retargeted skeletons back to OpenPose-style control images with correct coloring and topology (supports COCO-18, BODY-25, and COCO-133).
+### Skeleton Retargeting
+- **Pose Extraction** -- Convert DWPose/OpenPose keypoints into skeleton tensors (COCO-18, BODY-25, COCO-133)
+- **Person Tracking** -- Follow a specific subject across video frames with torso-anchor matching
+- **Automatic Retargeting** -- Compute scale, rotation, and offset transforms between skeletons using configurable body anchors
+- **Relative & Absolute Modes** -- Transfer motion deltas or map poses directly to reference proportions
+- **Visualization** -- Render retargeted skeletons to OpenPose-style control images with correct topology and coloring
 
-## 📦 Installation
+### Face Mesh Retargeting (New)
+- **MediaPipe Face Detection** -- Detect 478 face landmarks, head pose matrix, and blendshape coefficients per frame
+- **3D Face Reorientation** -- Rotate the face mesh by euler angles in metric 3D space with perspective-correct projection
+- **Textured Rendering** -- Rasterize the reoriented mesh using the original video frame as texture via per-triangle UV mapping
+- **Facing Ratio Mask** -- Per-pixel confidence channel indicating texture trustworthiness (1.0 = frontal, 0.0 = grazing/stretched), designed to drive diffusion inpainting strength
 
-1.  Navigate to your ComfyUI custom nodes directory:
+## Installation
+
+1. Navigate to your ComfyUI custom nodes directory:
     ```bash
     cd ComfyUI/custom_nodes/
     ```
-2.  Clone this repository:
+2. Clone this repository:
     ```bash
     git clone https://github.com/cedarconnor/ComfyUI-Skeletonretarget.git
     ```
-3.  Restart ComfyUI.
+3. Install dependencies:
+    ```bash
+    cd ComfyUI-Skeletonretarget
+    pip install -r requirements.txt
+    ```
+4. Restart ComfyUI. The MediaPipe face landmarker model (~4MB) downloads automatically on first use.
 
-## 🛠️ Usage Workflow
+## Nodes
 
-### Basic Retargeting Pipeline
+### Skeleton Retargeting
 
-1.  **Extract Reference Skeleton**:
-    -   Load your **Reference Image**.
-    -   Pass it through a **DWPose Estimator** (or similar).
-    -   Connect the output validation `pose_keypoint` to the `ExtractSkeletonFromPose` node.
+**Extract Skeleton From Pose** -- Converts DWPose/OpenPose detector output to normalized skeleton tensors. Supports largest-person selection, index-based selection, or cross-frame tracking.
 
-2.  **Extract Driving Skeleton Sequence**:
-    -   Load your **Driving Video**.
-    -   Pass it through the estimator.
-    -   Connect output to `ExtractSkeletonFromPose`.
-    -   *Tip: Use `person_selection="track"` if there are multiple people.*
+**Compute Retarget Transform** -- Calculates scale, rotation, and anchor offset between a reference and driving skeleton. Anchor modes: hips, shoulders, neck, torso, auto.
 
-3.  **Compute Transform**:
-    -   Add `ComputeRetargetTransform` node.
-    -   Connect **Reference Skeleton** (from step 1) and **Driving Skeleton** (from step 2).
-    -   Select `anchor_mode` (e.g., `hips` or `auto`).
-    -   Enable `enable_scale` to match proportions.
+**Apply Retarget Transform** -- Applies the computed transform to a skeleton sequence. Supports absolute positioning and relative motion transfer. Bounds handling: none, clamp, scale_to_fit, flag_only.
 
-4.  **Apply Transform**:
-    -   Add `ApplyRetargetTransform` node.
-    -   Connect the **Driving Skeleton Sequence** and the **Transform** (from step 3).
+**Skeleton To OpenPose Image** -- Renders skeleton data into OpenPose-format control images. Supports COCO-18, BODY-25, and COCO-133 (hands/face).
 
-5.  **Visualize / Export**:
-    -   Add `SkeletonToOpenPoseImage` node.
-    -   Connect the **Retargeted Sequence**.
-    -   Set desired resolution (e.g., 512x512 or match your video).
-    -   Connect the output `IMAGE` to a Preview or Video Combine node, or use it as input for ControlNet.
+### Face Mesh Retargeting
 
-## 🧩 Nodes
+**MediaPipe Face Landmarker** -- Runs MediaPipe FaceLandmarker on input frames. Outputs 478 landmarks (normalized image-space), 4x4 head pose matrix, UV coordinates for texture mapping, and optional blendshape coefficients.
 
-### Extraction
--   **`Extract Skeleton From Pose`**:
-    -   `pose_data`: Input from DWPose/OpenPose.
-    -   `track`: Enable temporal coherence for video.
+**Reorient Face Mesh** -- Rotates the detected face mesh by pitch/yaw/roll offsets. Converts landmarks to metric 3D using the head pose matrix, applies rotation around the face centroid, then projects back to image-space. Two modes:
+- *Additive* (default) -- rotates relative to the current head pose
+- *Absolute* -- strips original rotation and applies target orientation directly
 
-### Transform
--   **`Compute Retarget Transform`**:
-    -   Calculates the offset, scale, and rotation between two skeletons.
-    -   `anchor_mode`: Determines which body part is used as the center of alignment.
--   **`Apply Retarget Transform`**:
-    -   Applies the calculated transform to a sequence of skeletons.
-    -   `bounds_mode`: Options to clamp or handle points going off-screen (`none`, `clamp`, `scale_to_fit`).
+**Render Textured Face Mesh** -- Rasterizes the reoriented mesh with the original video frame as texture. Uses per-triangle OpenCV affine warps. Outputs three channels:
+- *rendered_face* (IMAGE) -- the textured face at the new orientation
+- *face_mask* (MASK) -- binary silhouette of the face geometry
+- *facing_ratio_mask* (MASK) -- soft confidence gradient for diffusion compositing
 
-### Visualization
--   **`Skeleton To OpenPose Image`**:
-    -   Renders the skeleton data into the colorful OpenPose format expected by ControlMaps.
-    -   Supports `COCO-133` (Hands/Face), `COCO-18`, and `BODY-25`.
+## Usage
 
-## 🤝 License
+### Skeleton Retargeting Pipeline
+
+```
+Reference Image -> DWPose -> Extract Skeleton From Pose -> (reference_skeleton)
+Driving Video   -> DWPose -> Extract Skeleton From Pose -> (driving_skeleton, skeleton_sequence)
+
+(reference_skeleton, driving_skeleton) -> Compute Retarget Transform -> (transform)
+(skeleton_sequence, transform)         -> Apply Retarget Transform   -> (retargeted_sequence)
+(retargeted_sequence)                  -> Skeleton To OpenPose Image -> IMAGE (for ControlNet)
+```
+
+### Face Mesh Retargeting Pipeline
+
+```
+Video Frames -> MediaPipe Face Landmarker -> (landmarks, face_matrix, landmark_uvs)
+
+(landmarks, face_matrix, yaw=20) -> Reorient Face Mesh -> (transformed_landmarks, vertex_normals)
+
+(transformed_landmarks, vertex_normals, landmark_uvs, video_frames)
+    -> Render Textured Face Mesh -> (rendered_face, face_mask, facing_ratio_mask)
+```
+
+The facing ratio mask feeds directly into video diffusion as an inpainting confidence channel. Where the mask is bright, diffusion preserves the real face texture. Where it falls off, diffusion generates freely. The threshold and feather parameters control the transition zone.
+
+## Dependencies
+
+- `opencv-python` -- Image processing and per-triangle rendering
+- `numpy` -- Array operations
+- `mediapipe>=0.10.14` -- Face landmark detection (tasks API)
+- `torch>=2.0` -- Provided by ComfyUI
+
+## License
 
 MIT License.
